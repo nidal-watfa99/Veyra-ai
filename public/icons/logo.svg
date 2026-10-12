@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <rect width="128" height="128" rx="28" fill="#0B0E14"/>
+  <rect x="4" y="4" width="120" height="120" rx="24" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>
+  <path d="M32 88 L64 28 L96 88" stroke="#0E766E" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <circle cx="64" cy="72" r="10" fill="#14B8A6"/>
+  <text x="64" y="108" text-anchor="middle" font-family="system-ui,sans-serif" font-size="14" font-weight="600" fill="#94A3B8">VEYRA</text>
+</svg>

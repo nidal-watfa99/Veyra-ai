@@ -1,0 +1,6 @@
+{
+  "name": "Veyra AI — Precision AI Employee Platform",
+  "description": "Precision-engineered AI employee platform for managing customer conversations, appointment booking, and autonomous lead follow-ups.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
