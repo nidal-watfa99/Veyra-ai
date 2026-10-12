@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: unzip-source
@@ -44,33 +45,31 @@ jobs:
 
       - name: Unzip and remove archive
         if: steps.find.outputs.found == 'true'
+        env:
+          ZIP: ${{ steps.find.outputs.zip }}
         run: |
           set -euo pipefail
-          ZIP="${{ steps.find.outputs.zip }}"
           echo "Extracting: $ZIP"
-
-          # استخراج إلى مجلد مؤقت لمعرفة البنية
           TMPDIR=$(mktemp -d)
-          unzip -o "$ZIP" -d "$TMPDIR"
+          unzip -q -o "$ZIP" -d "$TMPDIR"
 
-          # إذا كان داخل الأرشيف مجلد واحد فقط (مثل veyra-ai-tmp)، انقل محتوياته للجذر
+          shopt -s dotglob nullglob
           ENTRIES=("$TMPDIR"/*)
-          if [ \( {#ENTRIES[@]} -eq 1 ] && [ -d " \){ENTRIES[0]}" ]; then
-            echo "Single top-level folder detected: \( (basename " \){ENTRIES[0]}")"
-            # انسخ المحتويات إلى جذر المستودع
-            cp -a "${ENTRIES[0]}"/. .
+          if [ "${#ENTRIES[@]}" -eq 1 ] && [ -d "${ENTRIES[0]}" ]; then
+            SRC="${ENTRIES[0]}"
+            echo "Single top-level folder: $(basename "$SRC")"
           else
-            echo "Extracting contents directly to repository root"
-            cp -a "$TMPDIR"/. .
+            SRC="$TMPDIR"
           fi
 
+          rm -rf "$SRC/.git" "$SRC/.github/workflows" "$SRC/__MACOSX"
+          rm -f "$SRC/.env"
+          rm -rf "$SRC/node_modules"
+
+          cp -a "$SRC"/. .
           rm -rf "$TMPDIR"
           rm -f "$ZIP"
           echo "Removed archive: $ZIP"
-
-          # لا ترفع أسراراً إن وُجدت بالخطأ
-          rm -f .env
-          rm -rf node_modules
 
       - name: Commit extracted files
         if: steps.find.outputs.found == 'true'
@@ -87,3 +86,9 @@ jobs:
 
           git commit -m "chore: unzip source archive and remove zip from repository"
           git push
+
+      - name: Trigger deploy
+        if: steps.find.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run deploy.yml --ref "${GITHUB_REF_NAME}"
