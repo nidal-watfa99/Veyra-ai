@@ -2,7 +2,7 @@ name: Deploy Veyra AI to GitHub Pages
 
 on:
   push:
-    branches: ['main', 'master']
+    branches: [main, master]
   workflow_dispatch:
 
 permissions:
@@ -11,30 +11,53 @@ permissions:
   id-token: write
 
 concurrency:
-  group: 'pages'
+  group: pages
   cancel-in-progress: true
 
 jobs:
   build-and-deploy:
+    runs-on: ubuntu-latest
+
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Extract project archive
+        run: |
+          mkdir -p extracted
+          unzip -q veyra-ai-production-source.zip -d extracted
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
 
-      - name: Install dependencies
-        run: npm install --legacy-peer-deps
+      - name: Find project and build
+        id: build
+        run: |
+          PACKAGE_JSON=$(find extracted -name package.json -type f -print -quit)
 
-      - name: Build production app
-        run: npm run build
+          if [ -z "$PACKAGE_JSON" ]; then
+            echo "ERROR: package.json was not found in the ZIP archive."
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$PACKAGE_JSON")
+          echo "Project directory: $PROJECT_DIR"
+          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+
+          cd "$PROJECT_DIR"
+          npm install --legacy-peer-deps
+          npm run build
+
+          if [ ! -d dist ]; then
+            echo "ERROR: Build completed without a dist directory."
+            exit 1
+          fi
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
@@ -42,7 +65,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: './dist'
+          path: extracted/${{ steps.build.outputs.project_dir }}/dist
 
       - name: Deploy to GitHub Pages
         id: deployment
