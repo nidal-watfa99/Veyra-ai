@@ -29,7 +29,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Find project and build
         id: build
@@ -52,11 +52,7 @@ jobs:
           echo "Project directory: $DIR"
           cd "$DIR"
 
-          if [ -f package-lock.json ]; then
-            npm ci
-          else
-            npm install
-          fi
+          npm ci --legacy-peer-deps || npm install --legacy-peer-deps
           npm run build
 
           for d in dist build out; do
