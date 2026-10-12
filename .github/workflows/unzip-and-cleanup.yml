@@ -1,0 +1,89 @@
+name: Unzip source archive
+
+on:
+  push:
+    branches: ['main', 'master']
+    paths:
+      - '*.zip'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: unzip-source
+  cancel-in-progress: true
+
+jobs:
+  unzip:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Find ZIP at repository root
+        id: find
+        run: |
+          set -euo pipefail
+          mapfile -t ZIPS < <(find . -maxdepth 1 -type f -name '*.zip' | sed 's|^\./||' | sort)
+          if [ "${#ZIPS[@]}" -eq 0 ]; then
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "No ZIP file at repository root. Nothing to do."
+            exit 0
+          fi
+          if [ "${#ZIPS[@]}" -gt 1 ]; then
+            echo "Multiple ZIP files found at root:"
+            printf ' - %s\n' "${ZIPS[@]}"
+            echo "Using the first one: ${ZIPS[0]}"
+          fi
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "zip=${ZIPS[0]}" >> "$GITHUB_OUTPUT"
+          echo "Found: ${ZIPS[0]}"
+
+      - name: Unzip and remove archive
+        if: steps.find.outputs.found == 'true'
+        run: |
+          set -euo pipefail
+          ZIP="${{ steps.find.outputs.zip }}"
+          echo "Extracting: $ZIP"
+
+          # استخراج إلى مجلد مؤقت لمعرفة البنية
+          TMPDIR=$(mktemp -d)
+          unzip -o "$ZIP" -d "$TMPDIR"
+
+          # إذا كان داخل الأرشيف مجلد واحد فقط (مثل veyra-ai-tmp)، انقل محتوياته للجذر
+          ENTRIES=("$TMPDIR"/*)
+          if [ \( {#ENTRIES[@]} -eq 1 ] && [ -d " \){ENTRIES[0]}" ]; then
+            echo "Single top-level folder detected: \( (basename " \){ENTRIES[0]}")"
+            # انسخ المحتويات إلى جذر المستودع
+            cp -a "${ENTRIES[0]}"/. .
+          else
+            echo "Extracting contents directly to repository root"
+            cp -a "$TMPDIR"/. .
+          fi
+
+          rm -rf "$TMPDIR"
+          rm -f "$ZIP"
+          echo "Removed archive: $ZIP"
+
+          # لا ترفع أسراراً إن وُجدت بالخطأ
+          rm -f .env
+          rm -rf node_modules
+
+      - name: Commit extracted files
+        if: steps.find.outputs.found == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit -m "chore: unzip source archive and remove zip from repository"
+          git push
