@@ -107,4 +107,4 @@ Configure SMTP env vars for server-side email; otherwise a `mailto:` fallback is
 
 ## License
 
-Proprietary — all rights reserved unless otherwise stated by the project owner. deploy v3
+Proprietary — all rights reserved unless otherwise stated by the project 
