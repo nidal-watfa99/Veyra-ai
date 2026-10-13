@@ -1,0 +1,332 @@
+/**
+ * Veyra AI — in-app error tracker (زر تتبع الأخطاء)
+ *
+ * Captures: uncaught errors, unhandled promise rejections, console.error/warn,
+ * and every fetch() call to /api/* or an external host (status, time, error body).
+ * Secrets (API keys, Bearer tokens, ?key=...) are redacted before anything is stored
+ * or shown, so the copied report is safe to share.
+ *
+ * Installed at import time (before React renders) so early errors are not missed.
+ */
+import { useEffect, useState } from 'react';
+import type { CSSProperties } from 'react';
+
+type Level = 'error' | 'warn' | 'net' | 'info';
+
+interface LogEntry {
+  id: number;
+  time: string;
+  level: Level;
+  message: string;
+}
+
+const MAX_ENTRIES = 300;
+const entries: LogEntry[] = [];
+const listeners = new Set<() => void>();
+let counter = 0;
+
+// ---------- redaction ----------
+function redact(input: string): string {
+  return input
+    .replace(/(Bearer\s+)[A-Za-z0-9._\-]{8,}/gi, '$1[REDACTED]')
+    .replace(/\bgsk_[A-Za-z0-9]{8,}/g, 'gsk_[REDACTED]')
+    .replace(/\bAIza[A-Za-z0-9_\-]{8,}/g, 'AIza[REDACTED]')
+    .replace(/\bAQ\.[A-Za-z0-9_\-]{8,}/g, 'AQ.[REDACTED]')
+    .replace(/\bsk-[A-Za-z0-9_\-]{8,}/g, 'sk-[REDACTED]')
+    .replace(/\bcsk-[A-Za-z0-9_\-]{8,}/g, 'csk-[REDACTED]')
+    .replace(/([?&](?:key|api_key|apikey|token)=)[^&\s"']+/gi, '$1[REDACTED]');
+}
+
+function stringify(arg: unknown): string {
+  if (arg instanceof Error) {
+    return `${arg.name}: ${arg.message}${arg.stack ? '\n' + arg.stack.split('\n').slice(1, 4).join('\n') : ''}`;
+  }
+  if (typeof arg === 'string') return arg;
+  try {
+    return JSON.stringify(arg);
+  } catch {
+    return String(arg);
+  }
+}
+
+function push(level: Level, message: string) {
+  const entry: LogEntry = {
+    id: ++counter,
+    time: new Date().toLocaleTimeString('en-GB'),
+    level,
+    message: redact(message).slice(0, 1500),
+  };
+  entries.push(entry);
+  if (entries.length > MAX_ENTRIES) entries.shift();
+  listeners.forEach((l) => l());
+}
+
+// ---------- installation ----------
+declare global {
+  interface Window {
+    __veyraTrackerInstalled?: boolean;
+  }
+}
+
+function install() {
+  if (typeof window === 'undefined' || window.__veyraTrackerInstalled) return;
+  window.__veyraTrackerInstalled = true;
+
+  window.addEventListener('error', (e) => {
+    const where = e.filename ? ` (${e.filename.split('/').pop()}:${e.lineno}:${e.colno})` : '';
+    push('error', `Uncaught: ${e.message}${where}`);
+  });
+
+  window.addEventListener('unhandledrejection', (e) => {
+    push('error', `Unhandled rejection: ${stringify(e.reason)}`);
+  });
+
+  const origError = console.error.bind(console);
+  const origWarn = console.warn.bind(console);
+  console.error = (...args: unknown[]) => {
+    push('error', args.map(stringify).join(' '));
+    origError(...args);
+  };
+  console.warn = (...args: unknown[]) => {
+    push('warn', args.map(stringify).join(' '));
+    origWarn(...args);
+  };
+
+  const origFetch = window.fetch.bind(window);
+  window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url =
+      typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url;
+    const method = (init?.method || (typeof input !== 'string' && !(input instanceof URL) ? (input as Request).method : 'GET')).toUpperCase();
+
+    // Skip Vite/dev-server asset noise; keep API calls and external hosts.
+    const isApi = url.startsWith('/api') || /^https?:\/\//i.test(url);
+    const isViteNoise = /\/(@vite|@react-refresh|node_modules|src\/)|\.(js|css|svg|png|jpg|woff2?)(\?|$)/i.test(url);
+    if (!isApi || isViteNoise) return origFetch(input as RequestInfo, init);
+
+    const started = performance.now();
+    try {
+      const res = await origFetch(input as RequestInfo, init);
+      const ms = Math.round(performance.now() - started);
+      const ctype = res.headers.get('content-type') || '';
+      let line = `${method} ${url} → ${res.status} (${ms}ms)`;
+
+      if (!res.ok) {
+        let body = '';
+        try {
+          body = (await res.clone().text()).slice(0, 400);
+        } catch {
+          /* ignore */
+        }
+        push('error', `${line}${body ? '\n' + body : ''}`);
+      } else if (url.startsWith('/api') && ctype.includes('text/html')) {
+        push(
+          'warn',
+          `${line}\nتحذير: الرد HTML وليس JSON — هذا المسار غير موجود في الخادم (يرجع صفحة التطبيق بدل الرد المتوقع).`
+        );
+      } else {
+        push('net', line);
+      }
+      return res;
+    } catch (err) {
+      const ms = Math.round(performance.now() - started);
+      push('error', `${method} ${url} ✗ فشل الاتصال (${ms}ms): ${stringify(err)}`);
+      throw err;
+    }
+  };
+
+  push('info', 'Error tracker started');
+}
+
+install();
+
+// ---------- UI ----------
+const COLORS: Record<Level, string> = {
+  error: '#F87171',
+  warn: '#FBBF24',
+  net: '#38BDF8',
+  info: '#94A3B8',
+};
+
+const LABELS: Record<Level, string> = {
+  error: 'خطأ',
+  warn: 'تحذير',
+  net: 'شبكة',
+  info: 'معلومة',
+};
+
+type Filter = 'all' | 'error' | 'net';
+
+export default function ErrorTracker() {
+  const [, force] = useState(0);
+  const [open, setOpen] = useState(false);
+  const [filter, setFilter] = useState<Filter>('all');
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    const l = () => force((n) => n + 1);
+    listeners.add(l);
+    return () => {
+      listeners.delete(l);
+    };
+  }, []);
+
+  const errorCount = entries.filter((e) => e.level === 'error').length;
+  const shown = entries
+    .filter((e) => (filter === 'all' ? true : filter === 'error' ? e.level === 'error' || e.level === 'warn' : e.level === 'net' || e.level === 'error'))
+    .slice()
+    .reverse();
+
+  const buildReport = () =>
+    [
+      `Veyra AI error report — ${new Date().toISOString()}`,
+      `UA: ${navigator.userAgent}`,
+      `Page: ${location.href}`,
+      '',
+      ...entries.map((e) => `[${e.time}] ${e.level.toUpperCase()} ${e.message}`),
+    ].join('\n');
+
+  const copyReport = async () => {
+    const text = buildReport();
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // Fallback for non-secure contexts / permission issues
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        document.execCommand('copy');
+      } catch {
+        /* ignore */
+      }
+      document.body.removeChild(ta);
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1800);
+  };
+
+  const clearAll = () => {
+    entries.length = 0;
+    listeners.forEach((l) => l());
+  };
+
+  const btn: CSSProperties = {
+    background: '#1E293B',
+    color: '#E2E8F0',
+    border: '1px solid rgba(255,255,255,0.12)',
+    borderRadius: 8,
+    padding: '6px 10px',
+    fontSize: 12,
+    cursor: 'pointer',
+  };
+
+  return (
+    <>
+      {/* Floating button */}
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-label="تتبع الأخطاء"
+        style={{
+          position: 'fixed',
+          left: 12,
+          bottom: 84,
+          zIndex: 2147483000,
+          width: 46,
+          height: 46,
+          borderRadius: 23,
+          border: `1px solid ${errorCount ? '#F87171' : 'rgba(255,255,255,0.18)'}`,
+          background: '#0F172A',
+          color: errorCount ? '#F87171' : '#94A3B8',
+          fontSize: 20,
+          cursor: 'pointer',
+          boxShadow: '0 4px 14px rgba(0,0,0,0.5)',
+        }}
+      >
+        🐞
+        {errorCount > 0 && (
+          <span
+            style={{
+              position: 'absolute',
+              top: -4,
+              right: -4,
+              minWidth: 20,
+              height: 20,
+              borderRadius: 10,
+              background: '#EF4444',
+              color: '#fff',
+              fontSize: 11,
+              lineHeight: '20px',
+              textAlign: 'center',
+              padding: '0 4px',
+            }}
+          >
+            {errorCount > 99 ? '99+' : errorCount}
+          </span>
+        )}
+      </button>
+
+      {/* Panel */}
+      {open && (
+        <div
+          dir="rtl"
+          style={{
+            position: 'fixed',
+            left: 8,
+            right: 8,
+            bottom: 8,
+            top: '30%',
+            zIndex: 2147483001,
+            background: '#0B1220',
+            color: '#E2E8F0',
+            border: '1px solid rgba(255,255,255,0.14)',
+            borderRadius: 14,
+            display: 'flex',
+            flexDirection: 'column',
+            boxShadow: '0 10px 40px rgba(0,0,0,0.7)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 10, borderBottom: '1px solid rgba(255,255,255,0.08)', flexWrap: 'wrap' }}>
+            <strong style={{ fontSize: 14, flex: 1 }}>تتبع أخطاء النظام ({entries.length})</strong>
+            <button type="button" style={btn} onClick={copyReport}>
+              {copied ? '✓ تم النسخ' : 'نسخ التقرير'}
+            </button>
+            <button type="button" style={btn} onClick={clearAll}>
+              مسح
+            </button>
+            <button type="button" style={btn} onClick={() => setOpen(false)}>
+              إغلاق
+            </button>
+          </div>
+
+          <div style={{ display: 'flex', gap: 6, padding: '8px 10px' }}>
+            {(['all', 'error', 'net'] as Filter[]).map((f) => (
+              <button
+                key={f}
+                type="button"
+                onClick={() => setFilter(f)}
+                style={{ ...btn, background: filter === f ? '#0E766E' : '#1E293B' }}
+              >
+                {f === 'all' ? 'الكل' : f === 'error' ? 'الأخطاء' : 'الشبكة'}
+              </button>
+            ))}
+          </div>
+
+          <div dir="ltr" style={{ overflowY: 'auto', flex: 1, padding: '0 10px 10px', fontFamily: 'monospace', fontSize: 11.5, lineHeight: 1.5 }}>
+            {shown.length === 0 && <div style={{ color: '#64748B', padding: 12 }}>لا توجد سجلات.</div>}
+            {shown.map((e) => (
+              <div key={e.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.06)', padding: '6px 0', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                <span style={{ color: '#64748B' }}>{e.time} </span>
+                <span style={{ color: COLORS[e.level], fontWeight: 700 }}>[{LABELS[e.level]}] </span>
+                <span>{e.message}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
