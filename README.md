@@ -102,6 +102,7 @@ cp data/store/backups/<file>.json data/store/veyra.json
 ## Developer contact
 
 Feedback form in the app targets **nidalwatfa99@gmail.com**.  
+
 Configure SMTP env vars for server-side email; otherwise a `mailto:` fallback is returned.
 
 ## License
