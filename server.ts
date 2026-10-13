@@ -182,4 +182,4 @@ async function main() {
 main().catch((e) => {
   console.error(JSON.stringify({ ts: new Date().toISOString(), level: 'error', message: 'startup_failed', meta: { error: String(e) } }));
   process.exit(1);
-});
+}); }{
