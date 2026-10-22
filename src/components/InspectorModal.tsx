@@ -18,6 +18,7 @@ import {
   Check
 } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
+import { generateAgentReply } from '../utils/aiClient';
 
 interface InspectorModalProps {
   item: AIEmployee | Conversation | Appointment | Lead | null;
@@ -85,30 +86,19 @@ export const InspectorModal: React.FC<InspectorModalProps> = ({
     let policyCheck = '';
     const isArabic = language === 'ar';
 
-    // Try calling live backend AI proxy first
-    try {
-      const response = await fetch('/api/ai/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          agentName: agent.name,
-          agentRole: agent.role,
-          userMessage: promptText,
-          context: conv.clientCompany,
-        }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        if (data.isLiveAI && data.reply) {
-          aiReplyText = data.reply;
-          intentDetected = `${data.provider?.toUpperCase()} [${data.model}] — Live Generation`;
-          retrievedSource = `Grounding: ${conv.clientCompany} Context & Policy Guidelines`;
-          policyCheck = 'Verified SEC & fiduciary compliance. Live model output validated.';
-        }
-      }
-    } catch {
-      // Fallback to verified domain response
+    // Try the configured live model first (called straight from the browser with the user's own key)
+    const live = await generateAgentReply({
+      agentName: agent.name,
+      agentRole: agent.role,
+      userMessage: promptText,
+      context: conv.clientCompany,
+      isArabic,
+    });
+    if (live) {
+      aiReplyText = live.reply;
+      intentDetected = `${live.provider.toUpperCase()} [${live.model}] — Live Generation`;
+      retrievedSource = `Grounding: ${conv.clientCompany} Context & Policy Guidelines`;
+      policyCheck = 'Verified SEC & fiduciary compliance. Live model output validated.';
     }
 
     if (!aiReplyText) {

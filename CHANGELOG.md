@@ -1,5 +1,14 @@
 # Changelog — audit & fixes
 
+## Static-hosting fix (GitHub Pages)
+
+- AI keys are now saved in the user's own browser and tested/used directly against each provider; no backend needed. New file: `src/utils/aiClient.ts`.
+- Key test lists the models the key can really use and auto-replaces retired model IDs (previous defaults for Cerebras, OpenRouter, Groq and Gemini had been removed by the providers).
+- Live chat in the conversation inspector uses the active provider's key and falls back to the built-in sample replies only when none is configured.
+- "Request storage access" no longer fails on normal pages (it only applies to embedded frames).
+- The four overview metric cards now open their related sections.
+
+
 ## Settings / modal pages (content was clipped or unreachable)
 - **Security & Storage Audit**: modal had no max height → on phones/short screens header/footer were pushed off-screen. Body now scrolls inside a viewport-sized (`dvh`) frame.
 - **AI Keys & Models**: on phones only ~68px of the settings content was visible (provider list took the space). The whole body now scrolls on small screens; two-pane scrolling kept on desktop. API-key field no longer overlaps the show/hide icon; rows wrap on narrow screens.

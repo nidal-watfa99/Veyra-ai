@@ -18,6 +18,17 @@ import {
 } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
 import { safeOpenWindow, resilientStorage } from '../utils/security';
+import {
+  type ProviderId,
+  getStoredKey,
+  setStoredKey,
+  removeStoredKey,
+  getActiveProvider,
+  maskKey,
+  testProvider,
+} from '../utils/aiClient';
+
+const CATALOG_STORAGE_KEY = 'veyra_ai_catalog_v2';
 
 export interface ProviderCatalogItem {
   id: string;
@@ -61,7 +72,7 @@ const DEFAULT_CATALOG: ProviderCatalogItem[] = [
       { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', tag: 'Fast / Multimodal', isFreeTierEligible: true },
       { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', tag: 'Complex Reasoning', isFreeTierEligible: true },
       { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', tag: 'Ultra High-Speed', isFreeTierEligible: true },
-      { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash', tag: 'Versatile / High Volume', isFreeTierEligible: true },
+      { id: 'gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash-Lite', tag: 'Versatile / High Volume', isFreeTierEligible: true },
     ],
   },
   {
@@ -80,8 +91,6 @@ const DEFAULT_CATALOG: ProviderCatalogItem[] = [
     models: [
       { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B Versatile', tag: 'Top Tier Open Weight', isFreeTierEligible: true },
       { id: 'llama-3.1-8b-instant', name: 'Llama 3.1 8B Instant', tag: 'Sub-second Latency', isFreeTierEligible: true },
-      { id: 'mixtral-8x7b-32768', name: 'Mixtral 8x7B (32k)', tag: 'High Context', isFreeTierEligible: true },
-      { id: 'gemma2-9b-it', name: 'Gemma 2 9B IT', tag: 'Lightweight', isFreeTierEligible: true },
     ],
   },
   {
@@ -95,10 +104,10 @@ const DEFAULT_CATALOG: ProviderCatalogItem[] = [
     },
     hasStoredKey: false,
     maskedKey: '',
-    selectedModel: 'llama3.1-70b',
+    selectedModel: 'llama-3.3-70b',
     status: 'untested',
     models: [
-      { id: 'llama3.1-70b', name: 'Llama 3.1 70B', tag: 'Wafer Speed', isFreeTierEligible: true },
+      { id: 'llama-3.3-70b', name: 'Llama 3.3 70B', tag: 'Wafer Speed', isFreeTierEligible: true },
       { id: 'llama3.1-8b', name: 'Llama 3.1 8B', tag: 'Ultra-Fast Agents', isFreeTierEligible: true },
     ],
   },
@@ -113,13 +122,11 @@ const DEFAULT_CATALOG: ProviderCatalogItem[] = [
     },
     hasStoredKey: false,
     maskedKey: '',
-    selectedModel: 'google/gemini-2.0-flash-exp:free',
+    selectedModel: 'meta-llama/llama-3.3-70b-instruct:free',
     status: 'untested',
     models: [
-      { id: 'google/gemini-2.0-flash-exp:free', name: 'Gemini 2.0 Flash Exp (Free)', tag: 'Experimental Free', isFreeTierEligible: true },
       { id: 'meta-llama/llama-3.3-70b-instruct:free', name: 'Llama 3.3 70B Instruct (Free)', tag: 'High Intelligence Free', isFreeTierEligible: true },
       { id: 'deepseek/deepseek-r1:free', name: 'DeepSeek R1 (Free)', tag: 'Reasoning Free', isFreeTierEligible: true },
-      { id: 'mistralai/mistral-7b-instruct:free', name: 'Mistral 7B Instruct (Free)', tag: 'Compact Free', isFreeTierEligible: true },
     ],
   },
 ];
@@ -134,17 +141,27 @@ export const AIKeysModal: React.FC<AIKeysModalProps> = ({ isOpen, onClose }) => 
   const isArabic = language === 'ar';
 
   const [catalog, setCatalog] = useState<ProviderCatalogItem[]>(() => {
-    // Try to restore stored client settings if available (for static deployments)
+    // Keys and settings live in this browser only (works on static hosting, no backend)
+    let saved: ProviderCatalogItem[] = [];
     try {
-      const saved = resilientStorage.getItem('veyra_ai_catalog_static');
-      if (saved) return JSON.parse(saved);
+      const raw = resilientStorage.getItem(CATALOG_STORAGE_KEY);
+      if (raw) saved = JSON.parse(raw);
     } catch {
-      // fallback
+      saved = [];
     }
-    return DEFAULT_CATALOG;
+    return DEFAULT_CATALOG.map((d) => {
+      const s = saved.find((x) => x.id === d.id);
+      const key = getStoredKey(d.id);
+      return {
+        ...d,
+        ...(s ? { selectedModel: s.selectedModel, status: s.status, lastTestedAt: s.lastTestedAt, lastLatencyMs: s.lastLatencyMs, lastError: s.lastError, models: s.models?.length ? s.models : d.models } : {}),
+        hasStoredKey: Boolean(key),
+        maskedKey: key ? maskKey(key) : '',
+      };
+    });
   });
   const [activeProviderId, setActiveProviderId] = useState<string>(() => {
-    return resilientStorage.getItem('veyra_active_provider') || 'gemini';
+    return getActiveProvider();
   });
   const [selectedProviderId, setSelectedProviderId] = useState<string>('gemini');
   const [inputKey, setInputKey] = useState<string>('');
@@ -176,21 +193,24 @@ export const AIKeysModal: React.FC<AIKeysModalProps> = ({ isOpen, onClose }) => 
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [isOpen, onClose]);
 
-  const fetchCatalog = async () => {
-    try {
-      const res = await fetch('/api/ai/catalog');
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data?.providers) && data.providers.length > 0) {
-          setCatalog(data.providers);
-        }
-        if (data?.activeProvider) {
-          setActiveProviderId(data.activeProvider);
-        }
-      }
-    } catch (err) {
-      console.warn('Failed to load catalog:', err);
-    }
+  const persistCatalog = (updated: ProviderCatalogItem[]) => {
+    resilientStorage.setItem(CATALOG_STORAGE_KEY, JSON.stringify(updated));
+  };
+
+  const flashMessage = (msg: string) => {
+    setSaveMessage(msg);
+    setTimeout(() => setSaveMessage(null), 2500);
+  };
+
+  // Re-sync "has key" flags from browser storage
+  const fetchCatalog = () => {
+    setCatalog((prev) =>
+      prev.map((p) => {
+        const key = getStoredKey(p.id);
+        return { ...p, hasStoredKey: Boolean(key), maskedKey: key ? maskKey(key) : '' };
+      })
+    );
+    setActiveProviderId(getActiveProvider());
   };
 
   if (!isOpen) return null;
@@ -199,157 +219,52 @@ export const AIKeysModal: React.FC<AIKeysModalProps> = ({ isOpen, onClose }) => 
 
   const handleTestKey = async () => {
     if (!currentProvider) return;
+    const keyToUse = inputKey.trim() || getStoredKey(currentProvider.id);
+    if (!keyToUse) {
+      setTestResult({
+        success: false,
+        status: 'invalid_key',
+        error: isArabic ? 'يرجى إدخال مفتاح API أولاً' : 'Please enter an API key first',
+      });
+      return;
+    }
+
     setIsTesting(true);
     setTestResult(null);
-
-    const testKeyToUse = inputKey.trim();
-
     try {
-      const res = await fetch('/api/ai/test', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          provider: currentProvider.id,
-          apiKey: testKeyToUse || undefined,
-          model: currentProvider.selectedModel,
-        }),
+      const out = await testProvider(currentProvider.id as ProviderId, keyToUse, currentProvider.selectedModel);
+      setTestResult(out);
+
+      if (out.success) {
+        // A key that passed a real test is saved locally so the agents can use it
+        setStoredKey(currentProvider.id, keyToUse);
+        resilientStorage.setItem('veyra_model_' + currentProvider.id, out.model || currentProvider.selectedModel);
+        setInputKey('');
+      }
+
+      setCatalog((prev) => {
+        const updated = prev.map((p) => {
+          if (p.id !== currentProvider.id) return p;
+          const liveModels = (out.models || []).slice(0, 30).map((m) => ({
+            id: m.id,
+            name: m.name,
+            tag: 'Live',
+            isFreeTierEligible: true,
+          }));
+          return {
+            ...p,
+            status: out.status,
+            lastTestedAt: new Date().toISOString(),
+            lastLatencyMs: out.latencyMs,
+            lastError: out.success ? undefined : out.error,
+            selectedModel: out.model || p.selectedModel,
+            models: liveModels.length ? liveModels : p.models,
+            ...(out.success ? { hasStoredKey: true, maskedKey: maskKey(keyToUse) } : {}),
+          };
+        });
+        persistCatalog(updated);
+        return updated;
       });
-
-      let serverVerdict: any = null;
-      try {
-        serverVerdict = await res.json();
-      } catch {
-        serverVerdict = null; // not JSON => no API server behind this host (static hosting)
-      }
-      if (serverVerdict && typeof serverVerdict.success === 'boolean') {
-        setTestResult(serverVerdict);
-        fetchCatalog(); // Refresh stored statuses
-        return;
-      }
-      throw new Error(`Server returned ${res.status}`);
-    } catch {
-      // Static / GitHub Pages direct test fallback
-      const startTime = performance.now();
-      try {
-        if (!testKeyToUse) {
-          throw new Error(isArabic ? 'يرجى إدخال مفتاح API لاختباره مباشرة' : 'Please enter an API key to test directly in static mode');
-        }
-
-        let sampleResponse = '';
-        if (currentProvider.id === 'gemini') {
-          const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${currentProvider.selectedModel}:generateContent?key=${testKeyToUse}`;
-          const gRes = await fetch(geminiUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: 'Respond with: Veyra AI live status verified.' }] }],
-              generationConfig: { maxOutputTokens: 25 },
-            }),
-          });
-          const gData = await gRes.json();
-          if (!gRes.ok) {
-            throw new Error(gData.error?.message || `HTTP ${gRes.status}`);
-          }
-          sampleResponse = gData.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || 'Verified connection.';
-        } else if (currentProvider.id === 'openrouter') {
-          const oRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${testKeyToUse}`,
-            },
-            body: JSON.stringify({
-              model: currentProvider.selectedModel,
-              messages: [{ role: 'user', content: 'Say OK' }],
-              max_tokens: 10,
-            }),
-          });
-          const oData = await oRes.json();
-          if (!oRes.ok) {
-            throw new Error(oData.error?.message || `HTTP ${oRes.status}`);
-          }
-          sampleResponse = oData.choices?.[0]?.message?.content?.trim() || 'Verified OpenRouter connection.';
-        } else {
-          // General OpenAI-compatible proxy test (Groq / Cerebras)
-          const endpoint = currentProvider.id === 'groq' 
-            ? 'https://api.groq.com/openai/v1/chat/completions'
-            : 'https://api.cerebras.ai/v1/chat/completions';
-          const epRes = await fetch(endpoint, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${testKeyToUse}`,
-            },
-            body: JSON.stringify({
-              model: currentProvider.selectedModel,
-              messages: [{ role: 'user', content: 'Say OK' }],
-              max_tokens: 10,
-            }),
-          });
-          const epData = await epRes.json();
-          if (!epRes.ok) {
-            throw new Error(epData.error?.message || `HTTP ${epRes.status}`);
-          }
-          sampleResponse = epData.choices?.[0]?.message?.content?.trim() || 'Verified response.';
-        }
-
-        const latencyMs = Math.round(performance.now() - startTime);
-        const result = {
-          success: true,
-          status: 'connected',
-          latencyMs,
-          sampleResponse,
-        };
-        setTestResult(result);
-
-        // Update catalog in static mode
-        setCatalog((prev) => {
-          const updated = prev.map((p) =>
-            p.id === currentProvider.id
-              ? {
-                  ...p,
-                  status: 'connected' as const,
-                  hasStoredKey: true,
-                  maskedKey: testKeyToUse.length > 8 ? `${testKeyToUse.slice(0, 4)}••••${testKeyToUse.slice(-4)}` : '••••••••',
-                  lastTestedAt: new Date().toISOString(),
-                  lastLatencyMs: latencyMs,
-                  lastError: undefined,
-                }
-              : p
-          );
-          resilientStorage.setItem('veyra_ai_catalog_static', JSON.stringify(updated));
-          return updated;
-        });
-      } catch (clientErr) {
-        const errorMsg = (clientErr as Error).message || 'Connection error';
-        let status = 'timeout_error';
-        if (errorMsg.includes('API key not valid') || errorMsg.includes('401') || errorMsg.includes('invalid_api_key')) {
-          status = 'invalid_key';
-        } else if (errorMsg.includes('429') || errorMsg.includes('quota') || errorMsg.includes('ResourceExhausted')) {
-          status = 'quota_exceeded';
-        }
-
-        setTestResult({
-          success: false,
-          status,
-          error: errorMsg,
-        });
-
-        setCatalog((prev) => {
-          const updated = prev.map((p) =>
-            p.id === currentProvider.id
-              ? {
-                  ...p,
-                  status: status as any,
-                  lastTestedAt: new Date().toISOString(),
-                  lastError: errorMsg,
-                }
-              : p
-          );
-          resilientStorage.setItem('veyra_ai_catalog_static', JSON.stringify(updated));
-          return updated;
-        });
-      }
     } finally {
       setIsTesting(false);
     }
@@ -359,73 +274,36 @@ export const AIKeysModal: React.FC<AIKeysModalProps> = ({ isOpen, onClose }) => 
     if (!currentProvider) return;
 
     const trimmedKey = inputKey.trim();
-
-    try {
-      const res = await fetch('/api/ai/configure', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          provider: currentProvider.id,
-          apiKey: trimmedKey || undefined,
-          selectedModel: currentProvider.selectedModel,
-          makeActive,
-        }),
-      });
-
-      if (res.ok) {
-        setSaveMessage(isArabic ? 'تم حفظ التكوين بنجاح' : 'Configuration saved successfully');
-        setInputKey('');
-        fetchCatalog();
-        setTimeout(() => setSaveMessage(null), 2500);
-        return;
-      }
-      throw new Error(`Server returned ${res.status}`);
-    } catch {
-      // Static storage fallback
-      setCatalog((prev) => {
-        const updated = prev.map((p) => {
-          if (p.id === currentProvider.id) {
-            return {
-              ...p,
-              hasStoredKey: Boolean(trimmedKey) || p.hasStoredKey,
-              maskedKey: trimmedKey
-                ? (trimmedKey.length > 8 ? `${trimmedKey.slice(0, 4)}••••${trimmedKey.slice(-4)}` : '••••••••')
-                : p.maskedKey,
-            };
-          }
-          return p;
-        });
-        resilientStorage.setItem('veyra_ai_catalog_static', JSON.stringify(updated));
-        return updated;
-      });
-
-      if (makeActive) {
-        setActiveProviderId(currentProvider.id);
-        resilientStorage.setItem('veyra_active_provider', currentProvider.id);
-      }
-
-      setSaveMessage(isArabic ? 'تم حفظ التكوين محلياً بنجاح' : 'Configuration saved locally');
-      setInputKey('');
-      setTimeout(() => setSaveMessage(null), 2500);
+    if (trimmedKey) setStoredKey(currentProvider.id, trimmedKey);
+    const effectiveKey = trimmedKey || getStoredKey(currentProvider.id);
+    if (!effectiveKey) {
+      flashMessage(isArabic ? 'أدخل مفتاح API أولاً' : 'Enter an API key first');
+      return;
     }
+
+    resilientStorage.setItem('veyra_model_' + currentProvider.id, currentProvider.selectedModel);
+    setCatalog((prev) => {
+      const updated = prev.map((p) =>
+        p.id === currentProvider.id ? { ...p, hasStoredKey: true, maskedKey: maskKey(effectiveKey) } : p
+      );
+      persistCatalog(updated);
+      return updated;
+    });
+
+    if (makeActive) {
+      setActiveProviderId(currentProvider.id);
+      resilientStorage.setItem('veyra_active_provider', currentProvider.id);
+    }
+
+    setInputKey('');
+    flashMessage(isArabic ? 'تم حفظ التكوين على هذا المتصفح' : 'Configuration saved on this browser');
   };
 
   const handleDeleteKey = async () => {
     if (!currentProvider) return;
 
-    try {
-      await fetch('/api/ai/configure', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          provider: currentProvider.id,
-          apiKey: '',
-        }),
-      });
-    } catch (err) {
-      console.warn('Backend delete key call ignored in static mode:', err);
-    }
-
+    removeStoredKey(currentProvider.id);
+    resilientStorage.removeItem('veyra_model_' + currentProvider.id);
     setCatalog((prev) => {
       const updated = prev.map((p) =>
         p.id === currentProvider.id
@@ -439,40 +317,23 @@ export const AIKeysModal: React.FC<AIKeysModalProps> = ({ isOpen, onClose }) => 
             }
           : p
       );
-      resilientStorage.setItem('veyra_ai_catalog_static', JSON.stringify(updated));
+      persistCatalog(updated);
       return updated;
     });
 
     setInputKey('');
-    setSaveMessage(isArabic ? 'تم حذف المفتاح' : 'Key removed');
-    setTimeout(() => setSaveMessage(null), 2500);
+    setTestResult(null);
+    flashMessage(isArabic ? 'تم حذف المفتاح' : 'Key removed');
   };
 
   const handleModelChange = async (modelId: string) => {
     if (!currentProvider) return;
-
-    // Update local state and resilient storage
+    resilientStorage.setItem('veyra_model_' + currentProvider.id, modelId);
     setCatalog((prev) => {
-      const updated = prev.map((p) =>
-        p.id === currentProvider.id ? { ...p, selectedModel: modelId } : p
-      );
-      resilientStorage.setItem('veyra_ai_catalog_static', JSON.stringify(updated));
+      const updated = prev.map((p) => (p.id === currentProvider.id ? { ...p, selectedModel: modelId } : p));
+      persistCatalog(updated);
       return updated;
     });
-
-    // Save to server if available
-    try {
-      await fetch('/api/ai/configure', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          provider: currentProvider.id,
-          selectedModel: modelId,
-        }),
-      });
-    } catch {
-      // Ignored in static GitHub Pages mode
-    }
   };
 
   const getStatusBadge = (status: string) => {

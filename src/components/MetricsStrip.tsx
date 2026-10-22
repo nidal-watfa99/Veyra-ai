@@ -2,7 +2,11 @@ import React from 'react';
 import { MessageSquareText, CalendarCheck2, ShieldAlert, Award, ArrowUpRight } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
 
-export const MetricsStrip: React.FC = () => {
+interface MetricsStripProps {
+  onNavigate?: (tab: 'conversations' | 'appointments' | 'pipeline' | 'employees') => void;
+}
+
+export const MetricsStrip: React.FC<MetricsStripProps> = ({ onNavigate }) => {
   const { t } = useLanguage();
 
   const metrics = [
@@ -14,6 +18,7 @@ export const MetricsStrip: React.FC = () => {
       trend: '+18.4%',
       icon: MessageSquareText,
       accent: 'emerald',
+      target: 'conversations' as const,
     },
     {
       label: t('metricAppointments'),
@@ -23,6 +28,7 @@ export const MetricsStrip: React.FC = () => {
       trend: '+24.1%',
       icon: CalendarCheck2,
       accent: 'champagne',
+      target: 'appointments' as const,
     },
     {
       label: t('metricPipelineValue'),
@@ -32,6 +38,7 @@ export const MetricsStrip: React.FC = () => {
       trend: '+12.5%',
       icon: Award,
       accent: 'emerald',
+      target: 'pipeline' as const,
     },
     {
       label: t('metricResolutionRate'),
@@ -41,6 +48,7 @@ export const MetricsStrip: React.FC = () => {
       trend: '+2.1%',
       icon: ShieldAlert,
       accent: 'copper',
+      target: 'employees' as const,
     },
   ];
 
@@ -51,7 +59,16 @@ export const MetricsStrip: React.FC = () => {
         return (
           <div
             key={idx}
-            className="surface-card p-4 rounded-xl relative overflow-hidden group hover:border-slate-700/60 transition-colors"
+            role="button"
+            tabIndex={0}
+            onClick={() => onNavigate?.(item.target)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onNavigate?.(item.target);
+              }
+            }}
+            className="surface-card p-4 rounded-xl relative overflow-hidden group hover:border-slate-700/60 transition-colors cursor-pointer"
           >
             {/* Top row: Label & Icon */}
             <div className="flex items-center justify-between mb-3">

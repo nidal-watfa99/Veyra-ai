@@ -152,6 +152,18 @@ export async function checkAndRequestStorageAccess(requestIfNeeded: boolean = tr
     return { hasAccess: true, supported: false };
   }
 
+  // requestStorageAccess() only applies to embedded (third-party) frames.
+  // A normal top-level page is first-party and already has full storage access.
+  let embedded = false;
+  try {
+    embedded = typeof window !== 'undefined' && window.self !== window.top;
+  } catch {
+    embedded = true;
+  }
+  if (!embedded) {
+    return { hasAccess: true, supported: true };
+  }
+
   try {
     const alreadyGranted = await (document as any).hasStorageAccess();
     if (alreadyGranted) {

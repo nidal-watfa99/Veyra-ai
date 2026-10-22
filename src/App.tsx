@@ -218,7 +218,7 @@ function VeyraApp() {
           {activeTab === 'overview' && (
             <div className="space-y-6">
               {/* Business Overview Metrics Strip */}
-              <MetricsStrip />
+              <MetricsStrip onNavigate={(tab) => setActiveTab(tab)} />
 
               {/* AI Employee Status Section */}
               <AIPersonnelSection
