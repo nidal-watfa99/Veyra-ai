@@ -34,6 +34,11 @@ export const AIPersonnelSection: React.FC<AIPersonnelSectionProps> = ({
       </div>
 
       <div className={`grid grid-cols-1 ${compact ? 'lg:grid-cols-3' : 'md:grid-cols-2 lg:grid-cols-3'} gap-4`}>
+        {employees.length === 0 && (
+          <div className="col-span-full py-8 text-center text-xs text-[#64748B]">
+            {t('noConversationsMatch')}
+          </div>
+        )}
         {employees.map((agent) => {
           return (
             <div

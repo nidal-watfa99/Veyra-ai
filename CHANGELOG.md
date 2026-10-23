@@ -7,6 +7,7 @@
 - Live chat in the conversation inspector uses the active provider's key and falls back to the built-in sample replies only when none is configured.
 - "Request storage access" no longer fails on normal pages (it only applies to embedded frames).
 - The four overview metric cards now open their related sections.
+- The top channel bar (All / WhatsApp / Web Chat / Email / SMS) now filters AI personnel, conversations and the lead pipeline, and jumps to Messages when pressed from a tab that has no channel data.
 
 
 ## Settings / modal pages (content was clipped or unreachable)

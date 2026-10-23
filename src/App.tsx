@@ -21,6 +21,7 @@ import {
 } from './data/mockData';
 import { 
   ActiveTab, 
+  Channel,
   AIEmployee, 
   Conversation, 
   Appointment, 
@@ -47,6 +48,22 @@ function VeyraApp() {
   const [conversations] = useState<Conversation[]>(CONVERSATIONS);
   const [appointments] = useState<Appointment[]>(APPOINTMENTS);
   const [leads] = useState<Lead[]>(LEADS);
+
+  // The channel filter in the top bar applies everywhere a channel exists.
+  // Full lists are still passed for id lookups (agent names etc.).
+  const isAllChannels = selectedChannelFilter === 'All Channels';
+  const visibleEmployees = isAllChannels
+    ? employees
+    : employees.filter((e) => e.channels.includes(selectedChannelFilter as Channel));
+  const visibleLeads = isAllChannels ? leads : leads.filter((l) => l.channel === selectedChannelFilter);
+
+  const handleChannelFilterChange = (channel: string) => {
+    setSelectedChannelFilter(channel);
+    // Appointments and the vault have no channel data; jump to the messages view so the click visibly does something.
+    if (activeTab === 'appointments' || activeTab === 'vault') {
+      setActiveTab('conversations');
+    }
+  };
 
   // Modals & Inspection state
   const [inspectorItem, setInspectorItem] = useState<AIEmployee | Conversation | Appointment | Lead | null>(null);
@@ -182,7 +199,7 @@ function VeyraApp() {
         <TopBar
           activeTab={activeTab}
           selectedChannelFilter={selectedChannelFilter}
-          onChannelFilterChange={setSelectedChannelFilter}
+          onChannelFilterChange={handleChannelFilterChange}
           onOpenAuditModal={() => setActiveTab('vault')}
           onOpenDeployModal={() => setIsDeployModalOpen(true)}
           onOpenAIKeysModal={() => setIsAIKeysModalOpen(true)}
@@ -222,7 +239,7 @@ function VeyraApp() {
 
               {/* AI Employee Status Section */}
               <AIPersonnelSection
-                employees={employees}
+                employees={visibleEmployees}
                 onSelectEmployee={handleSelectEmployee}
                 compact={true}
               />
@@ -245,7 +262,7 @@ function VeyraApp() {
 
               {/* Lead Pipeline & High-Conviction Follow-ups */}
               <LeadPipelineSection
-                leads={leads}
+                leads={visibleLeads}
                 employees={employees}
                 onSelectLead={handleSelectLead}
               />
@@ -256,7 +273,7 @@ function VeyraApp() {
           {activeTab === 'employees' && (
             <div className="space-y-6">
               <AIPersonnelSection
-                employees={employees}
+                employees={visibleEmployees}
                 onSelectEmployee={handleSelectEmployee}
                 compact={false}
               />
@@ -290,7 +307,7 @@ function VeyraApp() {
           {activeTab === 'pipeline' && (
             <div className="space-y-6">
               <LeadPipelineSection
-                leads={leads}
+                leads={visibleLeads}
                 employees={employees}
                 onSelectLead={handleSelectLead}
               />
